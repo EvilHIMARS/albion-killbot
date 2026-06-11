@@ -6,14 +6,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = "ТВОЙ_ТОКЕН_ДИСКОРД_БОТА"
-CHANNEL_ID = 123456789012345678  # ID канала в Discord
-GUILD_ID = "УНИКАЛЬНЫЙ_ID_ГИЛЬДИИ"  # ID твоей гильдии в Альбионе
+import os
+TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID = 1488538529314246738  # ID канала в Discord
+GUILD_ID = "c7fgh-V2QTSYBJqKPpNtkg"  # ID твоей гильдии в Альбионе
 SERVER_URL = "https://gameinfo-ams.albiononline.com/api/gameinfo" # Европа
 # ===================================================
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
+intents.message_content = True
 processed_events = set()
 
 # Этот мини-веб-сервер нужен ТОЛЬКО для того, чтобы Render думал, что это сайт, и держал его онлайн бесплатно
