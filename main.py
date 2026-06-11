@@ -21,12 +21,22 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 processed_events = set()
 
-# Веб-сервер для Render
+# Исправленный веб-сервер, который теперь правильно отвечает Render на HEAD и GET
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Bot is alive")
+        
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+
+    # Глушим лишние логи в консоли Render
+    def log_message(self, format, *args):
+        return
 
 def run_web_server():
     server = HTTPServer(("0.0.0.0", 10000), HealthCheckHandler)
@@ -41,7 +51,7 @@ async def on_ready():
 # --- ФУНКЦИЯ ДЛЯ РИСОВАНИЯ КАРТОЧКИ ---
 async def generate_kill_image(killer_name, killer_guild, killer_ip, victim_name, victim_guild, victim_ip, fame, weapon_type, is_kill):
     # Создаем темный фон (ширина 600, высота 200)
-    bg_color = (25, 25, 25) if is_kill else (40, 20, 20) # Зеленоватый/красноватый оттенок фона в зависимости от исхода
+    bg_color = (20, 27, 23) if is_kill else (34, 21, 21) # Зеленоватый или красноватый фон
     img = Image.new("RGB", (600, 200), color=bg_color)
     draw = ImageDraw.Draw(img)
     
@@ -49,18 +59,24 @@ async def generate_kill_image(killer_name, killer_guild, killer_ip, victim_name,
     border_color = (46, 204, 113) if is_kill else (231, 76, 60)
     draw.rectangle([(0, 0), (599, 199)], outline=border_color, width=4)
     
-    # Пишем текст (используем стандартный шрифт PIL, чтобы не грузить файлы шрифтов)
-    draw.text((30, 25), f"Убийца: {killer_name}", fill=(255, 255, 255))
-    draw.text((30, 45), f"Гильдия: {killer_guild}", fill=(180, 180, 180))
-    draw.text((30, 65), f"IP: {killer_ip}", fill=(241, 196, 15))
+    # Пытаемся загрузить стандартный шрифт покрупнее, если нет — берем дефолтный
+    try:
+        font_title = ImageFont.load_default()
+    except:
+        font_title = None
+
+    # Рисуем текст
+    draw.text((30, 25), f"Убийца: {killer_name}", fill=(255, 255, 255), font=font_title)
+    draw.text((30, 50), f"Гильдия: {killer_guild}", fill=(180, 180, 180), font=font_title)
+    draw.text((30, 75), f"IP: {killer_ip}", fill=(241, 196, 15), font=font_title)
     
-    draw.text((380, 25), f"Жертва: {victim_name}", fill=(255, 255, 255))
-    draw.text((380, 45), f"Гильдия: {victim_guild}", fill=(180, 180, 180))
-    draw.text((380, 65), f"IP: {victim_ip}", fill=(241, 196, 15))
+    draw.text((380, 25), f"Жертва: {victim_name}", fill=(255, 255, 255), font=font_title)
+    draw.text((380, 50), f"Гильдия: {victim_guild}", fill=(180, 180, 180), font=font_title)
+    draw.text((380, 75), f"IP: {victim_ip}", fill=(241, 196, 15), font=font_title)
     
-    draw.text((30, 150), f"PvP Слава: {fame:,}", fill=(255, 215, 0))
+    draw.text((30, 150), f"PvP Слава: {fame:,}", fill=(255, 215, 0), font=font_title)
     
-    # Скачиваем и вставляем иконку оружия по центру, если она есть
+    # Скачиваем и вставляем иконку оружия
     if weapon_type:
         url = f"https://render.albiononline.com/v1/item/{weapon_type}.png?size=100"
         try:
@@ -69,12 +85,10 @@ async def generate_kill_image(killer_name, killer_guild, killer_ip, victim_name,
                     if resp.status == 200:
                         item_data = await resp.read()
                         item_img = Image.open(BytesIO(item_data)).convert("RGBA")
-                        # Накладываем иконку шмотки по центру карточки
-                        img.paste(item_img, (250, 40), item_img)
+                        img.paste(item_img, (250, 45), item_img)
         except:
-            pass # Если не удалось скачать вещь, просто оставляем карточку без иконки
+            pass
             
-    # Сохраняем картинку в буфер обмена для отправки в Discord
     final_buffer = BytesIO()
     img.save(final_buffer, format="PNG")
     final_buffer.seek(0)
@@ -103,7 +117,6 @@ async def test_kill_command(ctx):
 
     await ctx.send("🎨 Рисую тестовую карточку-картинку...")
     
-    # Генерируем тестовую картинку
     img_buffer = await generate_kill_image(
         killer_name="GvG_Monster", killer_guild="Toxic Players", killer_ip=1620,
         victim_name=ctx.author.name, victim_guild="x E C L I P S E x", victim_ip=1430,
@@ -144,7 +157,6 @@ async def check_killboard():
         if is_kill or is_death:
             weapon = killer.get("Equipment", {}).get("MainHand", {}).get("Type")
             
-            # Собираем данные и генерируем изображение
             img_buffer = await generate_kill_image(
                 killer_name=killer.get("Name", "Неизвестно"),
                 killer_guild=killer.get("GuildName") or "Без гильдии",
