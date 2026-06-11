@@ -6,8 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
 # ==================== НАСТРОЙКИ ====================
-import os
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = "MTUxNDY2NzEyNzM2NDEyNDY5Mg.GcyoaB.LRZ3yJtxZsFCyUecJe9WruISY-gJe-kN_vnkmM"
 CHANNEL_ID = 1488538529314246738  # ID канала в Discord
 GUILD_ID = "c7fgh-V2QTSYBJqKPpNtkg"  # ID твоей гильдии в Альбионе
 SERVER_URL = "https://gameinfo-ams.albiononline.com/api/gameinfo" # Европа
