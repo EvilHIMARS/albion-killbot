@@ -22,7 +22,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 processed_events = set()
 FONT_PATH = "/tmp/Roboto-Bold.ttf"
 
-# Слоты экипировки и их координаты на локальной сетке 3х4 (шаг 70px)
+# Координаты слотов для сетки 3х4 (шаг 145px под Full-HD)
 SLOT_MAPPING = {
     "Bag": (0, 0),       "Head": (1, 0),      "Cape": (2, 0),
     "MainHand": (0, 1),  "Armor": (1, 1),     "OffHand": (2, 1),
@@ -37,9 +37,23 @@ def download_font():
             response = requests.get(url, timeout=10)
             with open(FONT_PATH, "wb") as f:
                 f.write(response.content)
-            print("[Шрифты] Шрифт загружен успешно!")
+            print("[Система] Красивый русский шрифт Roboto загружен!")
         except Exception as e:
-            print(f"[Ошибка шрифта] Загрузка не удалась: {e}")
+            print(f"[Ошибка] Не удалось скачать шрифт: {e}")
+
+def parse_item_meta(item_type):
+    """Разбирает имя шмотки (напр. T8_MAIN_AXE_KEEPER@3) на Тир и Энчант"""
+    if not item_type:
+        return ""
+    tier = ""
+    for i in range(4, 9):
+        if item_type.startswith(f"T{i}"):
+            tier = f"T{i}"
+            break
+    enchant = ""
+    if "@" in item_type:
+        enchant = f".{item_type.split('@')[-1]}"
+    return f"{tier}{enchant}"
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -62,19 +76,18 @@ def run_web_server():
 @bot.event
 async def on_ready():
     download_font()
-    print(f"[{bot.user.name}] Бот успешно запущен и готов генерировать боевые карточки шмота!")
+    print(f"[{bot.user.name}] Бот на Render готов генерировать Full-HD карточки шмота!")
     if not check_killboard.is_running():
         check_killboard.start()
 
-# --- ФУНКЦИЯ СКАЧИВАНИЯ И ОТРИСОВКИ СЕТКИ ПРЕДМЕТОВ ---
-async def draw_equipment_grid(draw_ctx, base_img, equipment_dict, start_x, start_y):
-    # Рисуем пустые заглушки под шмот (квадраты со скруглением или просто рамки)
+# --- ФУНКЦИЯ ОТРИСОВКИ СЕТКИ ПРЕДМЕТОВ ---
+async def draw_equipment_grid(draw_ctx, base_img, equipment_dict, start_x, start_y, font):
     for slot, (grid_x, grid_y) in SLOT_MAPPING.items():
-        x = start_x + grid_x * 75
-        y = start_y + grid_y * 75
-        draw_ctx.rectangle([x, y, x + 65, y + 65], fill=(35, 35, 35), outline=(50, 50, 50), width=1)
+        x = start_x + grid_x * 150
+        y = start_y + grid_y * 150
+        # Рисуем пустые ячейки под инвентарь
+        draw_ctx.rectangle([x, y, x + 130, y + 130], fill=(35, 20, 60), outline=(142, 68, 173), width=2)
 
-    # Скачиваем и накладываем реальные иконки шмота
     async with aiohttp.ClientSession() as session:
         for slot, item_data in equipment_dict.items():
             if not item_data or slot not in SLOT_MAPPING:
@@ -84,107 +97,118 @@ async def draw_equipment_grid(draw_ctx, base_img, equipment_dict, start_x, start
                 continue
                 
             grid_x, grid_y = SLOT_MAPPING[slot]
-            x = start_x + grid_x * 75
-            y = start_y + grid_y * 75
+            x = start_x + grid_x * 150
+            y = start_y + grid_y * 150
             
-            url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=65"
+            url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=130"
             try:
                 async with session.get(url, timeout=5) as resp:
                     if resp.status == 200:
                         img_data = await resp.read()
                         item_img = Image.open(BytesIO(img_data)).convert("RGBA")
                         base_img.paste(item_img, (x, y), item_img)
+                        
+                        # Пишем тир шмотки (например 8.3) поверх картинки
+                        meta_text = parse_item_meta(item_type)
+                        if meta_text:
+                            draw_ctx.text((x + 10, y + 10), meta_text, fill=(241, 196, 15), font=font)
             except:
                 pass
 
-# --- ГЕНЕРАЦИЯ ПОЛНОРАЗМЕРНОЙ КАРТИНКИ (СТИЛЬ ALBION TOOLS) ---
-async def generate_battle_sheet(killer_data, victim_data, fame, is_kill):
-    # Большое горизонтальное полотно (ширина 780, высота 380)
-    bg_color = (24, 28, 25) if is_kill else (34, 24, 24)
-    img = Image.new("RGB", (780, 380), color=bg_color)
+# --- ГЕНЕРАЦИЯ HD КАРТИНКИ (1920x1080) ---
+async def generate_hd_battle_sheet(killer_data, victim_data, fame, is_kill):
+    # Создаем холст 1920x1080 с темно-фиолетовым фоном #2D0A4E
+    img = Image.new("RGB", (1920, 1080), color=(45, 10, 78))
     draw = ImageDraw.Draw(img)
     
-    # Цветная рамка исхода боя
+    # Внешняя неоновая рамка
     border_color = (46, 204, 113) if is_kill else (231, 76, 60)
-    draw.rectangle([(0, 0), (779, 379)], outline=border_color, width=4)
+    draw.rectangle([(20, 20), (1900, 1060)], outline=border_color, width=5)
     
     try:
-        font_name = ImageFont.truetype(FONT_PATH, 16)
-        font_guild = ImageFont.truetype(FONT_PATH, 14)
-        font_center = ImageFont.truetype(FONT_PATH, 15)
+        font_title = ImageFont.truetype(FONT_PATH, 64)
+        font_header = ImageFont.truetype(FONT_PATH, 40)
+        font_sub = ImageFont.truetype(FONT_PATH, 26)
+        font_item = ImageFont.truetype(FONT_PATH, 18)
     except:
-        font_name = font_guild = font_center = None
+        font_title = font_header = font_sub = font_item = None
 
-    # ТЕКСТ СЛЕВА: УБИЙЦА
-    draw.text((30, 20), f"⚔️ {killer_data['Name']}", fill=(46, 204, 113), font=font_name)
-    draw.text((30, 42), f"[{killer_data['Alliance']}] {killer_data['Guild']}", fill=(200, 200, 200), font=font_guild)
-    draw.text((30, 62), f"IP: {killer_data['IP']}", fill=(241, 196, 15), font=font_guild)
-    
-    # ТЕКСТ СПРАВА: ЖЕРТВА
-    draw.text((530, 20), f"💀 {victim_data['Name']}", fill=(231, 76, 60), font=font_name)
-    draw.text((530, 42), f"[{victim_data['Alliance']}] {victim_data['Guild']}", fill=(200, 200, 200), font=font_guild)
-    draw.text((530, 62), f"IP: {victim_data['IP']}", fill=(241, 196, 15), font=font_guild)
+    # ЛЕВАЯ СТОРОНА: УБИЙЦА
+    draw.text((100, 80), "УБИЙЦА ⚔️", fill=(46, 204, 113), font=font_header)
+    draw.text((100, 150), killer_data['Name'], fill=(255, 255, 255), font=font_title)
+    draw.text((100, 240), f"Гильдия: [{killer_data['Alliance']}] {killer_data['Guild']}", fill=(200, 200, 200), font=font_sub)
+    draw.text((100, 280), f"Мощность IP: {killer_data['IP']}", fill=(241, 196, 15), font=font_sub)
 
-    # ЦЕНТРАЛЬНЫЙ БЛОК (Слава и статус)
-    draw.text((320, 150), "🔥 PvP СЛАВА", fill=(254, 201, 47), font=font_center)
-    draw.text((330, 175), f"{fame:,}", fill=(255, 255, 255), font=font_name)
-    
-    status_text = "ИГРОК УБИТ" if is_kill else "ЧЛЕН ГИЛЬДИИ ПОГИБ"
-    status_color = (46, 204, 113) if is_kill else (231, 76, 60)
-    draw.text((310, 220), status_text, fill=status_color, font=font_center)
+    # ПРАВАЯ СТОРОНА: ЖЕРТВА
+    draw.text((1100, 80), "💀 ЖЕРТВА", fill=(231, 76, 60), font=font_header)
+    draw.text((1100, 150), victim_data['Name'], fill=(255, 255, 255), font=font_title)
+    draw.text((1100, 240), f"Гильдия: [{victim_data['Alliance']}] {victim_data['Guild']}", fill=(200, 200, 200), font=font_sub)
+    draw.text((1100, 280), f"Мощность IP: {victim_data['IP']}", fill=(241, 196, 15), font=font_sub)
 
-    # Отрисовка двух сеток инвентаря (Убийца x=30, Жертва x=530, y=90)
-    await draw_equipment_grid(draw, img, killer_data["Equipment"], 30, 90)
-    await draw_equipment_grid(draw, img, victim_data["Equipment"], 530, 90)
+    # ЦЕНТР: ПЛАШКА "KILL"
+    draw.rectangle([(840, 140), (1080, 250)], fill=(192, 57, 43), outline=(255, 255, 255), width=3)
+    draw.text((900, 160), "KILL", fill=(255, 255, 255), font=font_header)
+
+    # Сетка шмота убийцы (слева внизу)
+    draw.text((100, 390), "ЭКИПИРОВКА УБИЙЦЫ:", fill=(46, 204, 113), font=font_header)
+    await draw_equipment_grid(draw, img, killer_data["Equipment"], 100, 460, font_item)
+
+    # Сетка шмота жертвы (справа внизу)
+    draw.text((1100, 390), "ЭКИПИРОВКА ЖЕРТВЫ:", fill=(231, 76, 60), font=font_header)
+    await draw_equipment_grid(draw, img, victim_data["Equipment"], 1100, 460, font_item)
+
+    # НИЖНИЙ БАР: СТАТИСТИКА
+    draw.line([(100, 1000), (1820, 1000)], fill=(254, 201, 47), width=3)
+    draw.text((100, 1015), f"✨ ПОЛУЧЕНО PVP СЛАВЫ: {fame:,}", fill=(46, 204, 113), font=font_sub)
     
     final_buffer = BytesIO()
     img.save(final_buffer, format="PNG")
     final_buffer.seek(0)
     return final_buffer
 
-# --- КОМАНДЫ ДЛЯ ЧАТА ---
+# --- КОМАНДЫ ДЛЯ ДИСКОРДА ---
 
 @bot.command(name="тест")
 async def test_command(ctx):
-    await ctx.send("✅ Бот готов выводить фулл-сеты экипировки по образцу Albion Tools!")
+    await ctx.send("✅ Бот онлайн и готов генерировать Full-HD карточки в стиле Albion Tools!")
 
 @bot.command(name="канал")
 @commands.has_permissions(administrator=True)
 async def set_channel(ctx):
     global CHANNEL_ID
     CHANNEL_ID = ctx.channel.id
-    await ctx.send(f"📍 Канал для логов боя изменен на {ctx.channel.mention}!")
+    await ctx.send(f"📍 Логи киллборда будут отправляться в этот канал: {ctx.channel.mention}!")
 
 @bot.command(name="тест_килл")
 @commands.has_permissions(administrator=True)
 async def test_kill_command(ctx):
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
-        await ctx.send("❌ Используй команду `!канал` в целевом чате.")
+        await ctx.send("❌ Пропиши сначала `!канал` в нужном чате.")
         return
 
-    await ctx.send("🎨 Генерирую полноценный боевой лист со шмотом...")
+    await ctx.send("🎨 Рисую тяжелую Full-HD карточку экипировки... Подожди пару секунд.")
 
-    # Фейковый набор предметов для теста (Т8 топоры, броня, маунты)
-    fake_equipment = {
-        "Head": {"Type": "T8_HEAD_PLATE_SET1"},
-        "Armor": {"Type": "T8_ARMOR_PLATE_SET1"},
-        "Shoes": {"Type": "T8_SHOES_PLATE_SET1"},
+    # Тестовые данные предметов (Т8.3 топоры, плащи, броня)
+    fake_items = {
+        "Head": {"Type": "T8_HEAD_PLATE_SET1@3"},
+        "Armor": {"Type": "T8_ARMOR_PLATE_SET1@3"},
+        "Shoes": {"Type": "T8_SHOES_PLATE_SET1@3"},
         "MainHand": {"Type": "T8_MAIN_AXE_KEEPER@3"},
-        "Cape": {"Type": "T8_CAPE"},
-        "Mount": {"Type": "T4_MOUNT_HORSE"},
+        "Cape": {"Type": "T8_CAPE@3"},
+        "Mount": {"Type": "T5_MOUNT_ARMORED_HORSE"},
         "Potion": {"Type": "T8_POTION_HEAL"},
         "Food": {"Type": "T8_FOOD_STEW"}
     }
 
-    killer = {"Name": "DEDVARAG", "Guild": "x E C L I P S E x", "Alliance": "VITER", "IP": 1629, "Equipment": fake_equipment}
-    victim = {"Name": "Odwaznik", "Guild": "Без гильдии", "Alliance": "-", "IP": 1197, "Equipment": fake_equipment}
+    killer = {"Name": "DEDVARAG", "Guild": "x E C L I P S E x", "Alliance": "VITER", "IP": 1629, "Equipment": fake_items}
+    victim = {"Name": "Odwaznik", "Guild": "Enemy Guild", "Alliance": "BAD", "IP": 1197, "Equipment": fake_items}
 
-    img_buffer = await generate_battle_sheet(killer, victim, 25938, is_kill=True)
-    file = discord.File(fp=img_buffer, filename="kill_sheet.png")
+    img_buffer = await generate_hd_battle_sheet(killer, victim, 382552, is_kill=True)
+    file = discord.File(fp=img_buffer, filename="kill_hd_sheet.png")
     await channel.send(file=file)
 
-# --- ФОНОВЫЙ МОНИТОРИНГ ---
+# --- АВТОМАТИЧЕСКИЙ МОНИТОРИНГ ЖИВЫХ КИЛЛОВ ---
 
 @tasks.loop(seconds=30)
 async def check_killboard():
@@ -228,7 +252,7 @@ async def check_killboard():
                 "Equipment": victim.get("Equipment", {})
             }
 
-            img_buffer = await generate_battle_sheet(k_data, v_data, event.get("TotalVictimKillFame", 0), is_kill)
+            img_buffer = await generate_hd_battle_sheet(k_data, v_data, event.get("TotalVictimKillFame", 0), is_kill)
             file = discord.File(fp=img_buffer, filename=f"battle_{event_id}.png")
             try:
                 await channel.send(file=file)
