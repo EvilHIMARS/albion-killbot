@@ -7,18 +7,18 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.environ.get("DISCORD_TOKEN")  # Берем токен из скрытых настроек Render
-CHANNEL_ID = 1488538529314246738         # ID твоего канала в Discord
+TOKEN = os.environ.get("DISCORD_TOKEN")  # Токен из настроек Render
+CHANNEL_ID = 1488538529314246738         # ID канала по умолчанию
 GUILD_ID = "c7fgh-V2QTSYBJqKPpNtkg"      # ID твоей гильдии (x E C L I P S E x)
 SERVER_URL = "https://gameinfo-ams.albiononline.com/api/gameinfo" # Европа
 # ===================================================
 
 intents = discord.Intents.default()
-intents.message_content = True  # Включаем чтение сообщений для корректной работы бота
+intents.message_content = True  # Разрешаем чтение сообщений для команд
 bot = commands.Bot(command_prefix="!", intents=intents)
 processed_events = set()
 
-# Этот мини-веб-сервер нужен ТОЛЬКО для того, чтобы Render думал, что это сайт, и держал его онлайн бесплатно
+# Мини веб-сервер для Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -33,7 +33,30 @@ def run_web_server():
 @bot.event
 async def on_ready():
     print(f"[{bot.user.name}] Бот успешно запущен на Render и готов к работе!")
-    check_killboard.start()
+    if not check_killboard.is_running():
+        check_killboard.start()
+
+# --- КОМАНДЫ ДЛЯ ЧАТА ---
+
+@bot.command(name="тест")
+async def test_command(ctx):
+    """Проверка связи с ботом"""
+    await ctx.send(f"✅ Привет, {ctx.author.mention}! Я онлайн и мониторю киллборд гильдии каждые 30 секунд.")
+
+@bot.command(name="канал")
+@commands.has_permissions(administrator=True)
+async def set_channel(ctx):
+    """Привязать отправку киллов к текущему каналу"""
+    global CHANNEL_ID
+    CHANNEL_ID = ctx.channel.id
+    await ctx.send(f"📍 Канал для логов киллборда успешно изменен на {ctx.channel.mention}!")
+
+@set_channel.error
+async def set_channel_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ Настраивать бота (команда !канал) может только Администратор сервера.")
+
+# --- ФОНОВЫЙ МОНИТОРИНГ КИЛЛОВ ---
 
 @tasks.loop(seconds=30)
 async def check_killboard():
@@ -82,11 +105,14 @@ async def check_killboard():
             if weapon: 
                 embed.set_thumbnail(url=f"https://render.albiononline.com/v1/item/{weapon}.png")
             
-            await channel.send(embed=embed)
+            try:
+                await channel.send(embed=embed)
+            except:
+                pass
             await asyncio.sleep(1)
 
-# Запуск веб-сервера в отдельном потоке для обхода ограничений Render
+# Запуск веб-сервера
 threading.Thread(target=run_web_server, daemon=True).start()
 
-# Запуск самого Дискорд бота
+# Запуск бота
 bot.run(TOKEN)
