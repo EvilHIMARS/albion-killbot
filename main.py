@@ -8,12 +8,13 @@ from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+from datetime import datetime
 
 # ==================== НАСТРОЙКИ ====================
-TOKEN = os.environ.get("DISCORD_TOKEN")  # Токен из настроек Render
-CHANNEL_ID = 1488538529314246738         # ID канала по умолчанию
-GUILD_ID = "c7fgh-V2QTSYBJqKPpNtkg"      # ID твоей гильдии (x E C L I P S E x)
-SERVER_URL = "https://gameinfo-ams.albiononline.com/api/gameinfo" # Европа
+TOKEN = os.environ.get("DISCORD_TOKEN")
+CHANNEL_ID = 1488538529314246738         
+GUILD_ID = "c7fgh-V2QTSYBJqKPpNtkg"      
+SERVER_URL = "https://gameinfo-ams.albiononline.com/api/gameinfo" 
 # ===================================================
 
 intents = discord.Intents.default()
@@ -21,47 +22,44 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 processed_events = set()
 
-# Путь, куда скачаем шрифт для поддержки кириллицы и нормальных размеров
-FONT_FILE = "Arial-Bold.ttf"
+# --- СТРУКТУРА ПАПОК И ШРИФТОВ ---
+ASSETS_DIR = "assets"
+FONT_BOLD = f"{ASSETS_DIR}/Roboto-Bold.ttf"
+FONT_REGULAR = f"{ASSETS_DIR}/Roboto-Regular.ttf"
 
-def load_system_font(size):
-    """Надёжно скачивает и загружает шрифт, который не превратится в квадраты"""
-    if not os.path.exists(FONT_FILE):
-        try:
-            # Прямая ссылка на проверенный шрифт TrueType с поддержкой RU/EN
-            url = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Medium.ttf"
-            res = requests.get(url, timeout=10)
-            with open(FONT_FILE, "wb") as f:
-                f.write(res.content)
-            print("[Шрифт] Успешно загружен и готов к работе!")
-        except Exception as e:
-            print(f"[Шрифт] Ошибка скачивания: {e}")
-            return ImageFont.load_default()
-            
+def setup_assets():
+    """Создает папку assets и скачивает идеальные шрифты, если их нет"""
+    if not os.path.exists(ASSETS_DIR):
+        os.makedirs(ASSETS_DIR)
+        
+    fonts_to_download = {
+        FONT_BOLD: "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Bold.ttf",
+        FONT_REGULAR: "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf"
+    }
+    
+    for path, url in fonts_to_download.items():
+        if not os.path.exists(path):
+            try:
+                print(f"[Система] Скачиваю шрифт {path}...")
+                res = requests.get(url, timeout=10)
+                with open(path, "wb") as f:
+                    f.write(res.content)
+            except Exception as e:
+                print(f"[Ошибка] Не удалось скачать {path}: {e}")
+
+def get_font(font_type="regular", size=14):
+    path = FONT_BOLD if font_type == "bold" else FONT_REGULAR
     try:
-        return ImageFont.truetype(FONT_FILE, size)
+        return ImageFont.truetype(path, size)
     except:
         return ImageFont.load_default()
 
-# Координаты куклы персонажа (3х4 ячейки с шагом 105px)
-SLOT_MAPPING = {
-    "Bag": (0, 0),       "Head": (1, 0),      "Cape": (2, 0),
-    "MainHand": (0, 1),  "Armor": (1, 1),     "OffHand": (2, 1),
-    "Potion": (0, 2),    "Shoes": (1, 2),     "Food": (2, 2),
-    "Mount": (1, 3)
-}
-
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
         self.end_headers()
         self.wfile.write(b"Bot is alive")
-        
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
     def log_message(self, format, *args):
         return
 
@@ -71,16 +69,14 @@ def run_web_server():
 
 @bot.event
 async def on_ready():
-    # Прогревочный запуск скачивания шрифта
-    load_system_font(14)
-    print(f"[{bot.user.name}] Бот запущен. Дизайн полностью скопирован с Albion Tools!")
+    setup_assets() # Подготавливаем файлы при старте
+    print(f"[{bot.user.name}] Запущен! Использую идеальный темный английский шаблон.")
     if not check_killboard.is_running():
         check_killboard.start()
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def parse_item_tier(item_type):
-    """Вытаскивает из технического названия (напр. T8_ARMOR_PLATE_SET1@3) Тир и Чары"""
-    if not item_type:
-        return ""
+    if not item_type: return ""
     tier = ""
     for i in range(4, 9):
         if item_type.startswith(f"T{i}"):
@@ -91,27 +87,34 @@ def parse_item_tier(item_type):
         enchant = f".{item_type.split('@')[-1]}"
     return f"{tier}{enchant}"
 
-# --- РИСОВАНИЕ СЕТКИ ПРЕДМЕТОВ ---
-async def draw_equipment_grid(session, base_img, equipment, start_x, start_y, font_meta):
-    draw = ImageDraw.Draw(base_img)
+SLOT_MAPPING = {
+    "Bag": (0, 0),       "Head": (1, 0),      "Cape": (2, 0),
+    "MainHand": (0, 1),  "Armor": (1, 1),     "OffHand": (2, 1),
+    "Potion": (0, 2),    "Shoes": (1, 2),     "Food": (2, 2),
+    "Mount": (1, 3)
+}
+
+async def draw_equipment_grid(session, draw, base_img, equipment, start_x, start_y):
+    font_tier = get_font("bold", 14)
+    # Цвета в стиле killboard-1.com
+    slot_bg = (26, 28, 35, 255)       # Тёмный фон слота
+    slot_outline = (55, 60, 75, 255)  # Серо-синяя обводка
+
     for slot, (gx, gy) in SLOT_MAPPING.items():
-        x = start_x + gx * 105
-        y = start_y + gy * 105
-        # Оригинальная текстура пустых слотов: серо-коричневый цвет с темной обводкой
-        draw.rectangle([x, y, x + 95, y + 95], fill=(132, 120, 108), outline=(85, 75, 65), width=2)
+        x = start_x + gx * 110
+        y = start_y + gy * 110
+        draw.rectangle([x, y, x + 100, y + 100], fill=slot_bg, outline=slot_outline, width=1)
 
     for slot, item_data in equipment.items():
-        if not item_data or slot not in SLOT_MAPPING:
-            continue
+        if not item_data or slot not in SLOT_MAPPING: continue
         item_type = item_data.get("Type")
-        if not item_type:
-            continue
+        if not item_type: continue
             
         gx, gy = SLOT_MAPPING[slot]
-        x = start_x + gx * 105
-        y = start_y + gy * 105
+        x = start_x + gx * 110
+        y = start_y + gy * 110
         
-        url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=95"
+        url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=100"
         try:
             async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
@@ -119,81 +122,90 @@ async def draw_equipment_grid(session, base_img, equipment, start_x, start_y, fo
                     item_img = Image.open(BytesIO(img_data)).convert("RGBA")
                     base_img.paste(item_img, (x, y), item_img)
                     
-                    # Рисуем тир (например, VIII.3) в левом верхнем углу ячейки
                     tier_text = parse_item_tier(item_type)
                     if tier_text:
-                        draw.text((x + 6, y + 6), tier_text, fill=(255, 200, 50), font=font_meta)
+                        # Тень для текста, чтобы читалось идеально
+                        draw.text((x + 7, y + 7), tier_text, fill=(0, 0, 0), font=font_tier)
+                        draw.text((x + 5, y + 5), tier_text, fill=(234, 179, 8), font=font_tier) # Золотой
         except:
             pass
 
-# --- ОСНОВНОЙ РЕНДЕР КАРТОЧКИ ---
-async def generate_exact_albion_tools_sheet(killer_data, victim_data, fame, date_str, inventory_list):
-    # Размер холста увеличен в высоту (1000x950), чтобы влез инвентарь снизу
-    img = Image.new("RGBA", (1000, 950), color=(219, 197, 172, 255))
+# --- ГЛАВНЫЙ ГЕНЕРАТОР КАРТОЧКИ ---
+async def generate_pro_killboard_sheet(killer, victim, fame, timestamp, inventory):
+    # Темный современный фон
+    bg_color = (17, 18, 23, 255)
+    panel_color = (26, 28, 35, 255)
+    
+    img = Image.new("RGBA", (1200, 900), color=bg_color)
     draw = ImageDraw.Draw(img)
     
-    # Подгружаем шрифты разных размеров
-    font_bold = load_system_font(20)
-    font_sub = load_system_font(16)
-    font_center = load_system_font(18)
-    font_meta = load_system_font(13)
+    # Шрифты
+    f_name = get_font("bold", 32)
+    f_guild = get_font("regular", 20)
+    f_stats = get_font("bold", 22)
+    f_title = get_font("bold", 40)
+    f_sub = get_font("regular", 16)
 
-    # 1. СТРОКИ ИГРОКОВ (ВЕРХ)
-    # Убийца
-    draw.text((30, 40), f"{killer_data['Name'].upper()} - {killer_data['IP']:,}", fill=(40, 30, 20), font=font_bold)
-    draw.text((30, 70), f"[{killer_data['Alliance']}] {killer_data['Guild']}", fill=(80, 70, 60), font=font_sub)
-    
-    # Жертва
-    draw.text((660, 40), f"{victim_data['Name'].upper()} - {victim_data['IP']:,}", fill=(40, 30, 20), font=font_bold)
-    draw.text((660, 70), f"[{victim_data['Alliance']}] {victim_data['Guild']}", fill=(80, 70, 60), font=font_sub)
-    
-    # Водяной знак по центру
-    draw.text((410, 25), "albiononlinetools.com", fill=(100, 90, 80), font=font_sub)
+    # 1. ПЛАШКИ ИГРОКОВ (Верхняя часть)
+    draw.rectangle([40, 40, 560, 160], fill=panel_color, radius=10)
+    draw.rectangle([640, 40, 1160, 160], fill=panel_color, radius=10)
 
-    # 2. ЦЕНТРАЛЬНЫЙ БЛОК (СЛАВА, СЕРЕБРО, КНОПКА КИЛЛ)
-    # Иконка славы (Красная лента/круг)
-    draw.ellipse([480, 140, 520, 180], fill=(160, 50, 40))
-    draw.text((465, 195), f"{fame:,}", fill=(40, 30, 20), font=font_center)
-    
-    # Иконка серебра (Серый мешок/круг)
-    draw.ellipse([480, 340, 520, 380], fill=(100, 105, 110))
-    draw.text((465, 395), "382,552", fill=(40, 30, 20), font=font_center)
-    
-    # Скрещенные мечи и кнопка KILLED
-    draw.ellipse([450, 470, 550, 530], fill=(210, 185, 150), outline=(80, 70, 60), width=2)
-    draw.line([(475, 485), (525, 515)], fill=(50, 40, 30), width=4)
-    draw.line([(525, 485), (475, 515)], fill=(50, 40, 30), width=4)
-    
-    # Плашка КИЛЛЕД
-    draw.rectangle([(455, 545), (545, 575)], fill=(200, 180, 150), outline=(80, 70, 60))
-    draw.text((472, 550), "KILLED", fill=(40, 30, 20), font=font_meta)
-    
-    # Дата внизу центрального блока
-    draw.text((395, 660), date_str, fill=(80, 70, 60), font=font_sub)
+    # Killer Info
+    draw.text((60, 55), killer['Name'], fill=(255, 255, 255), font=f_name)
+    k_guild_text = f"[{killer['Alliance']}] {killer['Guild']}" if killer['Alliance'] != "-" else killer['Guild']
+    draw.text((60, 95), k_guild_text, fill=(160, 165, 181), font=f_guild)
+    draw.text((60, 125), f"Item Power: {killer['IP']}", fill=(234, 179, 8), font=f_sub)
 
-    # 3. ОТРИСОВКА КУКОЛ ЭКИПИРОВКИ
+    # Victim Info
+    draw.text((660, 55), victim['Name'], fill=(255, 255, 255), font=f_name)
+    v_guild_text = f"[{victim['Alliance']}] {victim['Guild']}" if victim['Alliance'] != "-" else victim['Guild']
+    draw.text((660, 95), v_guild_text, fill=(160, 165, 181), font=f_guild)
+    draw.text((660, 125), f"Item Power: {victim['IP']}", fill=(234, 179, 8), font=f_sub)
+
+    # 2. ЦЕНТРАЛЬНАЯ ИНФОРМАЦИЯ (Kill, Fame, Date)
+    draw.text((565, 55), "VS", fill=(239, 68, 68), font=f_title)
+    
+    draw.rectangle([480, 200, 720, 350], fill=panel_color, radius=10)
+    
+    # Имитация плашки KILL
+    draw.rectangle([520, 220, 680, 260], fill=(239, 68, 68, 255), radius=5)
+    draw.text((565, 228), "KILLED", fill=(255, 255, 255), font=f_stats)
+    
+    # Fame & Time
+    draw.text((510, 280), f"Kill Fame: {fame:,}", fill=(16, 185, 129), font=f_guild)
+    # Форматируем дату в стиль '11 Jun 2026, 21:05'
+    try:
+        dt = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+        date_str = dt.strftime("%d %b %Y, %H:%M")
+    except:
+        date_str = timestamp
+    draw.text((510, 315), date_str, fill=(160, 165, 181), font=f_sub)
+
+    # 3. ЭКИПИРОВКА (Куклы)
     async with aiohttp.ClientSession() as session:
-        await draw_equipment_grid(session, img, killer_data["Equipment"], 30, 120, font_meta)
-        await draw_equipment_grid(session, img, victim_data["Equipment"], 660, 120, font_meta)
+        # Убийца
+        draw.text((40, 190), "KILLER EQUIPMENT", fill=(160, 165, 181), font=f_sub)
+        await draw_equipment_grid(session, draw, img, killer["Equipment"], 40, 220)
+        
+        # Жертва
+        draw.text((640, 190), "VICTIM EQUIPMENT", fill=(160, 165, 181), font=f_sub)
+        await draw_equipment_grid(session, draw, img, victim["Equipment"], 840, 220) # Смещено вправо
 
-        # 4. НИЖНЯЯ ЧАСТЬ: ИНВЕНТАРЬ (СТРОГО КАК НА СКРИНШОТЕ ОРИГИНАЛА)
-        draw.text((30, 720), "Group Size: 1", fill=(60, 55, 50), font=font_sub)
-        draw.text((30, 750), "Participants: 0", fill=(60, 55, 50), font=font_sub)
+        # 4. ИНВЕНТАРЬ (Inventory)
+        draw.text((40, 680), "VICTIM INVENTORY", fill=(160, 165, 181), font=f_sub)
         
-        # Отрисовка ячеек инвентаря (9 штук в ряд, как на картинке)
-        inv_start_x = 30
-        inv_start_y = 800
+        inv_start_x = 40
+        inv_start_y = 710
         
-        for i in range(9):
-            x = inv_start_x + i * 105
-            draw.rectangle([x, inv_start_y, x + 95, inv_start_y + 95], fill=(195, 175, 150), outline=(140, 125, 110), width=2)
+        for i in range(10): # 10 ячеек в ряд
+            x = inv_start_x + i * 110
+            draw.rectangle([x, inv_start_y, x + 100, inv_start_y + 100], fill=panel_color, outline=(55, 60, 75, 255), width=1)
             
-            # Если у жертвы есть реальные вещи в инвентаре — вставляем их
-            if i < len(inventory_list) and inventory_list[i]:
-                item_type = inventory_list[i].get("Type")
-                count = inventory_list[i].get("Count", 1)
+            if i < len(inventory) and inventory[i]:
+                item_type = inventory[i].get("Type")
+                count = inventory[i].get("Count", 1)
                 
-                url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=95"
+                url = f"https://render.albiononline.com/v1/item/{item_type}.png?size=100"
                 try:
                     async with session.get(url, timeout=5) as resp:
                         if resp.status == 200:
@@ -202,115 +214,96 @@ async def generate_exact_albion_tools_sheet(killer_data, victim_data, fame, date
                             img.paste(inv_img, (x, inv_start_y), inv_img)
                             
                             if count > 1:
-                                draw.text((x + 70, inv_start_y + 70), str(count), fill=(255, 255, 255), font=font_meta)
+                                draw.text((x + 70, inv_start_y + 75), str(count), fill=(255, 255, 255), font=get_font("bold", 16))
                 except:
                     pass
 
     # Финализация
     final_buffer = BytesIO()
     img = img.convert("RGB")
-    img.save(final_buffer, format="PNG")
+    img.save(final_buffer, format="PNG", quality=95)
     final_buffer.seek(0)
     return final_buffer
 
-# --- КОМАНДЫ ДЛЯ ЧАТА ДИСКОРДА ---
-
+# --- КОМАНДЫ ДИСКОРДА ---
 @bot.command(name="гильдия")
 async def guild_info_command(ctx):
-    """Выводит подробную информацию о гильдии, за которой следит бот"""
-    await ctx.send("🔍 Запрашиваю актуальные данные о гильдии с серверов Albion Online...")
+    await ctx.send("🔍 Fetching guild data...")
     url = f"https://gameinfo-ams.albiononline.com/api/gameinfo/guilds/{GUILD_ID}"
-    
     try:
         response = requests.get(url, timeout=10)
-        if response.status_code != 200:
-            await ctx.send(f"❌ Не удалось связаться с API игры (Код: {response.status_code}).")
-            return
-            
+        if response.status_code != 200: return
         data = response.json()
-        g_name = data.get("Name", "x E C L I P S E x")
-        g_founder = data.get("FounderName", "Bogdan")
-        g_alliance = data.get("AllianceName") or "Нет альянса"
-        g_alliance_tag = f"[{data.get('AllianceTag')}]" if data.get('AllianceTag') else ""
-        g_members = data.get("MemberCount", 0)
-        g_fame = data.get("killFame", 0)
         
-        info_message = (
-            f"🛡️ **МОНИТОРИНГ ГИЛЬДИИ АКТИВЕН** 🛡️\n"
-            f"----------------------------------------\n"
-            f" Название: **{g_name}**\n"
-            f" Альянс: **{g_alliance_tag} {g_alliance}**\n"
-            f" Guild Master / Основатель: **{g_founder}**\n"
-            f" Количество бойцов: **{g_members} чел.**\n"
-            f" Всего PvP Славы (Kill Fame): **{g_fame:,}**\n"
-            f"----------------------------------------\n"
-            f"🤖 *Бот автоматически сканирует киллборд на предмет убийств и смертей этого состава.*"
+        info = (
+            f"🛡️ **GUILD MONITORING ACTIVE** 🛡️\n"
+            f"**Name:** {data.get('Name')}\n"
+            f"**Alliance:** [{data.get('AllianceTag')}] {data.get('AllianceName')}\n"
+            f"**Members:** {data.get('MemberCount')}\n"
+            f"**Total Kill Fame:** {data.get('killFame'):,}"
         )
-        await ctx.send(info_message)
+        await ctx.send(info)
     except Exception as e:
-        await ctx.send(f"❌ Ошибка при разборе данных гильдии: {str(e)}")
+        await ctx.send(f"❌ Error: {str(e)}")
 
 @bot.command(name="канал")
 @commands.has_permissions(administrator=True)
 async def set_channel(ctx):
     global CHANNEL_ID
     CHANNEL_ID = ctx.channel.id
-    await ctx.send("📍 Канал привязан! Дизайн Albion Tools активирован.")
+    await ctx.send("📍 Channel set! Pro English Killboard design activated.")
 
 @bot.command(name="тест_килл")
 @commands.has_permissions(administrator=True)
 async def test_kill_command(ctx):
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
-        await ctx.send("❌ Напиши сначала `!канал`")
+        await ctx.send("❌ Use `!канал` first.")
         return
 
-    await ctx.send("⏳ Создаю точную копию оригинального шаблона со шрифтами...")
+    await ctx.send("⏳ Generating Pro English Killboard template...")
 
+    # Фейковые вещи для теста
     fake_items = {
-        "Head": {"Type": "T8_HEAD_PLATE_SET1@3"},
-        "Armor": {"Type": "T8_ARMOR_PLATE_SET1@3"},
-        "Shoes": {"Type": "T8_SHOES_PLATE_SET1@3"},
-        "MainHand": {"Type": "T8_MAIN_AXE_KEEPER@3"},
+        "Head": {"Type": "T8_HEAD_CLOTH_SET1@3"},
+        "Armor": {"Type": "T8_ARMOR_CLOTH_SET1@3"},
+        "Shoes": {"Type": "T8_SHOES_CLOTH_SET1@3"},
+        "MainHand": {"Type": "T8_MAIN_FIRESTAFF@3"},
         "Cape": {"Type": "T8_CAPE@3"},
-        "Mount": {"Type": "T4_MOUNT_HORSE"},
+        "Mount": {"Type": "T5_MOUNT_ARMORED_HORSE"},
         "Potion": {"Type": "T8_POTION_HEAL"},
         "Food": {"Type": "T8_FOOD_STEW"}
     }
     
     fake_inventory = [
-        {"Type": "T4_BOOK", "Count": 2},
+        {"Type": "T4_RUNE", "Count": 99},
+        {"Type": "T5_SOUL", "Count": 45},
     ]
 
-    killer = {"Name": "DEDVARAG", "Guild": "x E C L I P S E x", "Alliance": "VITER", "IP": 1229, "Equipment": fake_items}
-    victim = {"Name": "Odwaznik", "Guild": "Без гильдии", "Alliance": "-", "IP": 1197, "Equipment": fake_items}
+    # Используем нейтральные ники для демонстрации дизайна
+    killer = {"Name": "ShadowStriker", "Guild": "x E C L I P S E x", "Alliance": "VITER", "IP": 1450, "Equipment": fake_items}
+    victim = {"Name": "FallenHero", "Guild": "Random Guild", "Alliance": "-", "IP": 1390, "Equipment": fake_items}
 
-    img_buffer = await generate_exact_albion_tools_sheet(killer, victim, 25938, "2026-06-11 03:26:12", fake_inventory)
-    file = discord.File(fp=img_buffer, filename="kill_exact.png")
+    img_buffer = await generate_pro_killboard_sheet(killer, victim, 145230, "2026-06-11 21:05:00", fake_inventory)
+    file = discord.File(fp=img_buffer, filename="pro_killboard.png")
     await channel.send(file=file)
 
-# --- ФОНОВОЙ МОНИТОРИНГ ЖИВЫХ СОБЫТИЙ ---
-
+# --- ФОНОВЫЙ МОНИТОРИНГ ---
 @tasks.loop(seconds=30)
 async def check_killboard():
     channel = bot.get_channel(CHANNEL_ID)
-    if not channel: 
-        return
+    if not channel: return
     try:
         response = requests.get(f"{SERVER_URL}/events?limit=30&offset=0", timeout=10)
-        if response.status_code != 200: 
-            return
+        if response.status_code != 200: return
         events = response.json()
-    except: 
-        return
+    except: return
 
     for event in reversed(events):
         event_id = event.get("EventId")
-        if not event_id or event_id in processed_events: 
-            continue
+        if not event_id or event_id in processed_events: continue
         processed_events.add(event_id)
-        if len(processed_events) > 300: 
-            processed_events.pop()
+        if len(processed_events) > 300: processed_events.pop()
 
         killer = event.get("Killer", {})
         victim = event.get("Victim", {})
@@ -319,14 +312,14 @@ async def check_killboard():
 
         if is_kill or is_death:
             k_data = {
-                "Name": killer.get("Name", "Неизвестно"),
+                "Name": killer.get("Name", "Unknown"),
                 "Guild": killer.get("GuildName") or "-",
                 "Alliance": killer.get("AllianceName") or "-",
                 "IP": int(killer.get("AverageItemPower", 0)),
                 "Equipment": killer.get("Equipment", {})
             }
             v_data = {
-                "Name": victim.get("Name", "Неизвестно"),
+                "Name": victim.get("Name", "Unknown"),
                 "Guild": victim.get("GuildName") or "-",
                 "Alliance": victim.get("AllianceName") or "-",
                 "IP": int(victim.get("AverageItemPower", 0)),
@@ -336,12 +329,11 @@ async def check_killboard():
             date_raw = event.get("TimeStamp", "2026-06-11T00:00:00").replace("T", " ").split(".")[0]
             inventory = [item for item in victim.get("Inventory", []) if item]
 
-            img_buffer = await generate_exact_albion_tools_sheet(k_data, v_data, event.get("TotalVictimKillFame", 0), date_raw, inventory)
+            img_buffer = await generate_pro_killboard_sheet(k_data, v_data, event.get("TotalVictimKillFame", 0), date_raw, inventory)
             file = discord.File(fp=img_buffer, filename=f"kill_{event_id}.png")
             try:
                 await channel.send(file=file)
-            except:
-                pass
+            except: pass
             await asyncio.sleep(1)
 
 threading.Thread(target=run_web_server, daemon=True).start()
