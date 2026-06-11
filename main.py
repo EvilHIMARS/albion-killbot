@@ -51,10 +51,48 @@ async def set_channel(ctx):
     CHANNEL_ID = ctx.channel.id
     await ctx.send(f"📍 Канал для логов киллборда успешно изменен на {ctx.channel.mention}!")
 
+@bot.command(name="тест_килл")
+@commands.has_permissions(administrator=True)
+async def test_kill_command(ctx):
+    """Симуляция тестовой смерти/килла для проверки отображения"""
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        await ctx.send("❌ Канал для отправки не найден. Сначала пропиши команду `!канал` в нужном чате.")
+        return
+
+    await ctx.send("🔄 Генерирую тестовую карточку боя...")
+
+    # Создаем фейковый эмбед под формат реального киллборда
+    embed = discord.Embed(
+        title=f"💀 Смерть! Погиб [{ctx.author.name}]", 
+        color=discord.Color.red(), 
+        url="https://albiononline.com"
+    )
+    embed.add_field(
+        name="👤 Убийца", 
+        value=f"**GvG_Monster_2000**\n[ENEMY] Toxic Players\n🛑 IP: 1610", 
+        inline=True
+    )
+    embed.add_field(
+        name="🎯 Жертва", 
+        value=f"**{ctx.author.name}**\n[ECLPS] x E C L I P S E x\n🛑 IP: 1450", 
+        inline=True
+    )
+    embed.add_field(
+        name="✨ Получено PvP Славы", 
+        value="250,000", 
+        inline=False
+    )
+    # Ставим иконку случайного Т8 артефактного топора для красоты
+    embed.set_thumbnail(url="https://render.albiononline.com/v1/item/T8_MAIN_AXE_KEEPER@3.png")
+
+    await channel.send(embed=embed)
+
 @set_channel.error
-async def set_channel_error(ctx, error):
+@test_kill_command.error
+async def admin_commands_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.send("❌ Настраивать бота (команда !канал) может только Администратор сервера.")
+        await ctx.send("❌ Настраивать бота и вызывать тесты может только Администратор сервера.")
 
 # --- ФОНОВЫЙ МОНИТОРИНГ КИЛЛОВ ---
 
